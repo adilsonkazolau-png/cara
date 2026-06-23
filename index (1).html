@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Captura Facial</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    html,body{width:100%;min-height:100vh;background:#0a0a0f;color:#fff;font-family:'Segoe UI',Arial,sans-serif;-webkit-tap-highlight-color:transparent;}
+    body{display:flex;flex-direction:column;align-items:center;padding:12px 12px 30px;}
+    h1{font-size:clamp(20px,5vw,26px);font-weight:700;margin:8px 0 2px;color:#00e5a0;}
+    #subtitle{font-size:13px;color:#555;margin-bottom:10px;}
+
+    #video-container{position:relative;width:100%;max-width:600px;border-radius:16px;overflow:hidden;border:3px solid #1e1e2e;}
+    video{width:100%;display:block;object-fit:cover;}
+    #overlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
+    #dir-svg{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);width:clamp(90px,20vw,120px);height:clamp(90px,20vw,120px);pointer-events:none;}
+
+    #status-bar{width:100%;max-width:600px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin:8px 0;padding:8px 14px;background:#111118;border-radius:12px;border:1px solid #1e1e2e;}
+    #model-status{font-size:12px;color:#666;}
+    #motion-badge{font-size:12px;padding:3px 10px;border-radius:20px;background:#1a1a2e;color:#666;border:1px solid #2a2a3e;transition:all 0.25s;}
+    #motion-badge.ok{background:#0d2e1f;color:#00e5a0;border-color:#00e5a0;}
+    #motion-badge.bad{background:#2e0d0d;color:#ff4d4d;border-color:#ff4d4d;}
+    #motion-badge.warn{background:#2e1f00;color:#ffcc00;border-color:#ffcc00;}
+
+    #instruction{font-size:clamp(22px,5.5vw,30px);font-weight:700;text-align:center;margin:10px 6px 0;min-height:42px;}
+    #voice-hint{font-size:13px;color:#555;text-align:center;min-height:18px;margin:3px 0 6px;}
+
+    /* Barra de 5 segundos — central, grande */
+    #hold-wrap{width:100%;max-width:600px;display:none;flex-direction:column;align-items:center;gap:6px;margin:6px 0;}
+    #hold-outer{width:100%;height:22px;background:#1e1e2e;border-radius:20px;overflow:hidden;}
+    #hold-inner{height:22px;width:0%;border-radius:20px;transition:width 0.2s linear;}
+    #hold-inner.correct{background:linear-gradient(90deg,#00b4d8,#00e5a0);}
+    #hold-inner.wrong{background:#ff4d4d;}
+    #hold-inner.motion{background:#ffcc00;}
+    #hold-timer{font-size:28px;font-weight:800;color:#00e5a0;min-height:36px;text-align:center;}
+    #hold-label{font-size:13px;color:#888;text-align:center;min-height:18px;}
+
+    /* Debug em tempo real — H, V, motion */
+    #raw-debug{font-size:11px;color:#333;text-align:center;min-height:16px;font-family:monospace;margin-bottom:2px;}
+
+    #countdown{font-size:clamp(44px,11vw,62px);font-weight:800;color:#00e5a0;text-align:center;min-height:66px;line-height:1;}
+
+    #progress-wrap{width:100%;max-width:600px;margin:8px 0 4px;}
+    #progress-label{display:flex;justify-content:space-between;font-size:12px;color:#555;margin-bottom:4px;}
+    #progress-outer{background:#1e1e2e;border-radius:20px;height:8px;}
+    #progress-inner{height:8px;width:0%;background:linear-gradient(90deg,#00b4d8,#00e5a0);border-radius:20px;transition:width 0.5s;}
+
+    #steps-list{width:100%;max-width:600px;display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-bottom:10px;}
+    .sdot{padding:5px 2px;text-align:center;font-size:clamp(9px,2vw,11px);color:#333;border-radius:8px;background:#111118;border:1px solid #1e1e2e;transition:all 0.3s;line-height:1.4;}
+    .sdot.active{color:#00e5a0;border-color:#00e5a0;background:#0d1f1a;}
+    .sdot.done{color:#1a4a30;border-color:#1a3020;}
+
+    #btn-row{display:flex;gap:12px;margin-bottom:10px;width:100%;max-width:600px;}
+    button{flex:1;padding:15px 10px;font-size:clamp(15px,4vw,18px);font-weight:600;border-radius:14px;border:none;cursor:pointer;-webkit-appearance:none;touch-action:manipulation;transition:all 0.2s;}
+    #startBtn{background:linear-gradient(135deg,#00e5a0,#00b4d8);color:#0a0a0f;}
+    #startBtn:disabled{background:#1e1e2e;color:#333;}
+    #stopBtn{background:#1e1e2e;color:#ff4d4d;border:1px solid #ff4d4d44;}
+    #stopBtn:disabled{opacity:0.28;}
+
+    #debugPanel{width:100%;max-width:600px;background:#0d0d14;color:#ffb300;padding:7px 12px;border-radius:8px;font-size:11px;min-height:20px;border:1px solid #1e1e2e;font-family:monospace;word-break:break-all;}
+  </style>
+</head>
+<body>
+  <h1>Captura Facial</h1>
+  <p id="subtitle">Siga cada instrução e mantenha 5 segundos</p>
+
+  <div id="video-container">
+    <video id="preview" autoplay muted playsinline webkit-playsinline></video>
+    <canvas id="overlay"></canvas>
+    <!-- Indicador de direção SVG -->
+    <svg id="dir-svg" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="60" cy="60" r="50" fill="none" stroke="#ffffff12" stroke-width="1.5"/>
+      <circle id="a-center"     cx="60" cy="60" r="13"  fill="#ffffff15"/>
+      <polygon id="a-up"        points="60,5   69,23 51,23"  fill="#ffffff15"/>
+      <polygon id="a-down"      points="60,115 69,97 51,97"  fill="#ffffff15"/>
+      <polygon id="a-left"      points="5,60   23,51 23,69"  fill="#ffffff15"/>
+      <polygon id="a-right"     points="115,60 97,51 97,69"  fill="#ffffff15"/>
+      <polygon id="a-up-left"   points="12,12 30,16 16,30"   fill="#ffffff15"/>
+      <polygon id="a-up-right"  points="108,12 104,30 90,16" fill="#ffffff15"/>
+      <polygon id="a-down-left" points="12,108 16,90 30,104" fill="#ffffff15"/>
+      <polygon id="a-down-right"points="108,108 90,104 104,90" fill="#ffffff15"/>
+      <circle id="a-smile"      cx="60" cy="60" r="32" fill="none" stroke="#ffffff15" stroke-width="3" stroke-dasharray="8 5"/>
+    </svg>
+  </div>
+
+  <div id="status-bar">
+    <span id="model-status">A carregar...</span>
+    <span id="motion-badge">— sensor —</span>
+  </div>
+
+  <div id="instruction">Clique em Iniciar</div>
+  <div id="voice-hint"></div>
+
+  <div id="hold-wrap">
+    <div id="hold-timer">5.0s</div>
+    <div id="hold-outer"><div id="hold-inner"></div></div>
+    <div id="hold-label">Aguardando...</div>
+  </div>
+
+  <div id="raw-debug"></div>
+  <div id="countdown"></div>
+
+  <div id="progress-wrap">
+    <div id="progress-label"><span id="prog-step">0 / 10</span><span id="prog-pct">0%</span></div>
+    <div id="progress-outer"><div id="progress-inner"></div></div>
+  </div>
+
+  <div id="steps-list"></div>
+
+  <div id="btn-row">
+    <button id="startBtn">▶ Iniciar</button>
+    <button id="stopBtn" disabled>⏹ Parar</button>
+  </div>
+  <div id="debugPanel">Aguardando...</div>
+
+  <script src="https://unpkg.com/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <script>
+  document.addEventListener('DOMContentLoaded', function() {
+
+    /* ── DOM ────────────────────────────────────────────────── */
+    const video        = document.getElementById('preview');
+    const oc           = document.getElementById('overlay');
+    const instruction  = document.getElementById('instruction');
+    const voiceHint    = document.getElementById('voice-hint');
+    const holdWrap     = document.getElementById('hold-wrap');
+    const holdTimer    = document.getElementById('hold-timer');
+    const holdOuter    = document.getElementById('hold-outer');
+    const holdInner    = document.getElementById('hold-inner');
+    const holdLabel    = document.getElementById('hold-label');
+    const rawDebug     = document.getElementById('raw-debug');
+    const countdown    = document.getElementById('countdown');
+    const progInner    = document.getElementById('progress-inner');
+    const progStep     = document.getElementById('prog-step');
+    const progPct      = document.getElementById('prog-pct');
+    const modelStatus  = document.getElementById('model-status');
+    const motionBadge  = document.getElementById('motion-badge');
+    const debugPanel   = document.getElementById('debugPanel');
+    const stepsList    = document.getElementById('steps-list');
+    const startBtn     = document.getElementById('startBtn');
+    const stopBtn      = document.getElementById('stopBtn');
+
+    /* ── Setas SVG ──────────────────────────────────────────── */
+    const arrowMap = {
+      center:'a-center', smile:'a-smile',
+      up:'a-up', down:'a-down', left:'a-left', right:'a-right',
+      up_left:'a-up-left', up_right:'a-up-right',
+      down_left:'a-down-left', down_right:'a-down-right'
+    };
+    function setArrow(dir, state){
+      /* state: 'idle' | 'correct' | 'wrong' */
+      const colors = {idle:'#ffffff15', correct:'#00e5a0', wrong:'#ff4d4d'};
+      const c = colors[state] || colors.idle;
+      Object.keys(arrowMap).forEach(k=>{
+        const el = document.getElementById(arrowMap[k]);
+        if(!el) return;
+        if(k==='smile'){ el.setAttribute('stroke', k===dir ? c : '#ffffff15'); }
+        else            { el.setAttribute('fill',   k===dir ? c : '#ffffff15'); }
+      });
+    }
+    function clearArrows(){ setArrow('__none__','idle'); }
+
+    /* ── Log ────────────────────────────────────────────────── */
+    function dbg(msg){ debugPanel.innerText = msg; }
+
+    /* ── Voz TTS ────────────────────────────────────────────── */
+    const synth = window.speechSynthesis;
+    let ptVoice = null;
+    function loadVoices(){
+      const all = synth.getVoices();
+      ptVoice = all.find(v=>v.lang==='pt-BR') || all.find(v=>v.lang.startsWith('pt')) || all[0] || null;
+    }
+    if(typeof synth.onvoiceschanged !== 'undefined') synth.onvoiceschanged = loadVoices;
+    loadVoices();
+    function say(text, rate){
+      try{ synth.cancel(); const u=new SpeechSynthesisUtterance(text); u.lang='pt-BR'; u.rate=rate||1; if(ptVoice) u.voice=ptVoice; synth.speak(u); }catch(e){}
+    }
+
+    /* ── Passos (duração ignorada agora — avança só pelo hold) ─ */
+    const HOLD_NEEDED = 5.0;   /* segundos contínuos na posição certa */
+    const MOTION_THR  = 2.5;   /* px médios por frame = movimento excessivo */
+    const POLL_MS     = 200;   /* ms entre cada detecção (5 fps de análise) */
+
+    const steps = [
+      {text:'Olhe para a câmera',    emoji:'👀', voice:'Olhe diretamente para a câmera',      dir:'center'},
+      {text:'Sorria',                emoji:'😊', voice:'Sorria para a câmera',                 dir:'smile'},
+      {text:'Olhe para cima',        emoji:'⬆️', voice:'Vire os olhos para cima, devagar',     dir:'up'},
+      {text:'Olhe para baixo',       emoji:'⬇️', voice:'Vire os olhos para baixo, devagar',    dir:'down'},
+      {text:'Olhe para a esquerda',  emoji:'⬅️', voice:'Vire os olhos para a esquerda',        dir:'left'},
+      {text:'Olhe para a direita',   emoji:'➡️', voice:'Vire os olhos para a direita',         dir:'right'},
+      {text:'Canto superior esquerdo',emoji:'↖️',voice:'Olhe para o canto superior esquerdo',  dir:'up_left'},
+      {text:'Canto superior direito', emoji:'↗️',voice:'Olhe para o canto superior direito',   dir:'up_right'},
+      {text:'Canto inferior esquerdo',emoji:'↙️',voice:'Olhe para o canto inferior esquerdo',  dir:'down_left'},
+      {text:'Canto inferior direito', emoji:'↘️',voice:'Olhe para o canto inferior direito',   dir:'down_right'}
+    ];
+
+    steps.forEach((s,i)=>{
+      const d=document.createElement('div'); d.className='sdot'; d.id='sd'+i;
+      d.innerHTML=s.emoji+'<br>'+s.text.split(' ').slice(0,2).join(' ');
+      stepsList.appendChild(d);
+    });
+    function updateDots(cur){
+      steps.forEach((_,i)=>{
+        const d=document.getElementById('sd'+i);
+        d.classList.remove('active','done');
+        if(i<cur) d.classList.add('done');
+        else if(i===cur) d.classList.add('active');
+      });
+    }
+
+    /* ── Estado ─────────────────────────────────────────────── */
+    let stream=null, mediaRecorder=null, chunks=[];
+    let stopped=false, running=false;
+    let modelsLoaded=false, modelsFailed=false;
+    let detTick=null;
+
+    /* calibração: valores neutros do rosto ao iniciar cada passo */
+    let calH=0, calV=0, calibrated=false;
+
+    /* sensor de movimento */
+    let prevNose=null;
+
+    startBtn.addEventListener('click', startCapture);
+    stopBtn.addEventListener('click',  stopCapture);
+    function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+    /* ── Carrega modelos ────────────────────────────────────── */
+    async function loadModels(){
+      if(modelsLoaded||modelsFailed) return;
+      try{
+        if(typeof faceapi==='undefined') throw new Error('face-api ausente');
+        modelStatus.innerText='🔄 Carregando IA...';
+        const CDNS=[
+          'https://unpkg.com/face-api.js@0.22.2/dist/weights',
+          'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights',
+          'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights'
+        ];
+        let loaded=false;
+        for(const CDN of CDNS){
+          try{
+            modelStatus.innerText='🔄 Carregando IA... ('+CDN.split('/')[2]+')';
+            await Promise.all([
+              faceapi.nets.tinyFaceDetector.loadFromUri(CDN),
+              faceapi.nets.faceLandmark68TinyNet.loadFromUri(CDN)
+            ]);
+            loaded=true; break;
+          }catch(e2){ dbg('CDN falhou: '+CDN+' — '+e2.message); continue; }
+        }
+        if(!loaded) throw new Error('Todos os CDNs falharam');
+        modelsLoaded=true; modelStatus.innerText='✅ IA pronta';
+        dbg('Modelos OK');
+      }catch(e){
+        modelsFailed=true; modelStatus.innerText='⚠️ Sem IA (modo simples)';
+        dbg('Modelos falharam: '+e.message);
+      }
+    }
+
+    /* ── Inicia ─────────────────────────────────────────────── */
+    async function startCapture(){
+      try{
+        stopped=false; running=true;
+        startBtn.disabled=true; stopBtn.disabled=false;
+        instruction.innerText='Abrindo câmera...';
+
+        if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+          instruction.innerText='❌ Câmera não suportada neste browser'; startBtn.disabled=false; running=false; return;
+        }
+
+        /* câmera: prefere frontal */
+        try{
+          stream = await navigator.mediaDevices.getUserMedia({
+            video:{facingMode:'user',width:{ideal:640},height:{ideal:480}}, audio:true
+          });
+        }catch(e1){
+          try{ stream = await navigator.mediaDevices.getUserMedia({video:true,audio:true}); }
+          catch(err){
+            const m={NotAllowedError:'Permissão negada.',NotFoundError:'Câmera não encontrada.',
+                     NotReadableError:'Câmera em uso.',SecurityError:'Bloqueado por segurança.'};
+            instruction.innerText='❌ '+(m[err.name]||err.name);
+            startBtn.disabled=false; running=false; return;
+          }
+        }
+
+        video.srcObject=stream;
+        video.setAttribute('playsinline',''); video.setAttribute('webkit-playsinline','');
+        await new Promise(r=>{ video.onloadedmetadata=r; });
+        try{ await video.play(); }catch(e){}
+        oc.width = video.videoWidth||640;
+        oc.height= video.videoHeight||480;
+
+        /* Carrega IA ANTES de começar (espera até 8s) */
+        modelStatus.innerText='🔄 Carregando IA...';
+        instruction.innerText='Aguarde: carregando IA...';
+        const loadPromise = loadModels();
+        const timeout = new Promise(r=>setTimeout(r,8000));
+        await Promise.race([loadPromise, timeout]);
+
+        if(!modelsLoaded){
+          instruction.innerText='⚠️ IA não carregou — verifique a ligação à internet'; say('Erro ao carregar. Verifique a internet.',1);
+          startBtn.disabled=false; running=false;
+          if(stream) stream.getTracks().forEach(t=>t.stop());
+          return;
+        }
+
+        say('Vamos começar. Posicione o rosto na câmera.',0.95);
+        instruction.innerText='Posicione o rosto...';
+
+        /* Contagem regressiva */
+        for(let i=3;i>0;i--){ if(stopped)return; countdown.innerText=i; await sleep(1000); }
+        countdown.innerText='';
+
+        /* MediaRecorder */
+        chunks=[];
+        try{
+          const mime='video/webm;codecs=vp8,opus';
+          mediaRecorder=new MediaRecorder(stream, MediaRecorder.isTypeSupported(mime)?{mimeType:mime}:{});
+        }catch(e){ try{mediaRecorder=new MediaRecorder(stream);}catch(e2){dbg('MediaRecorder erro: '+e2.message);} }
+        if(mediaRecorder){
+          mediaRecorder.ondataavailable=e=>{ if(e.data&&e.data.size>0) chunks.push(e.data); };
+          mediaRecorder.onstop=()=>{
+            const blob=new Blob(chunks,{type:'video/webm'});
+            const url=URL.createObjectURL(blob);
+            const a=document.createElement('a'); a.style.display='none'; a.href=url; a.download='captura_facial.webm';
+            document.body.appendChild(a); a.click();
+            setTimeout(()=>{ URL.revokeObjectURL(url); document.body.removeChild(a); },300);
+            if(stream) stream.getTracks().forEach(t=>t.stop());
+          };
+          mediaRecorder.start(500);
+        }
+        dbg('Gravação iniciada.');
+        await runSteps();
+      }catch(e){
+        dbg('Erro: '+e.message); instruction.innerText='❌ '+e.message;
+        startBtn.disabled=false; running=false;
+      }
+    }
+
+    function stopCapture(){
+      stopped=true; running=false;
+      startBtn.disabled=false; stopBtn.disabled=true;
+      if(detTick) clearInterval(detTick);
+      if(mediaRecorder&&mediaRecorder.state!=='inactive') mediaRecorder.stop();
+      instruction.innerText='⏹️ Parado'; countdown.innerText='';
+      holdWrap.style.display='none'; clearCanvas(); clearArrows();
+      motionBadge.className=''; motionBadge.innerText='— parado —';
+      synth.cancel(); dbg('Parado.');
+    }
+
+    function clearCanvas(){
+      oc.getContext('2d').clearRect(0,0,oc.width,oc.height);
+    }
+    function drawBorder(color, lineW){
+      const ctx=oc.getContext('2d');
+      ctx.clearRect(0,0,oc.width,oc.height);
+      ctx.lineWidth=lineW||10; ctx.strokeStyle=color;
+      ctx.strokeRect(5,5,oc.width-10,oc.height-10);
+    }
+
+    /* ── Loop de passos ─────────────────────────────────────── */
+    async function runSteps(){
+      for(let idx=0;idx<steps.length;idx++){
+        if(stopped) return;
+        const step=steps[idx];
+
+        /* UI do passo */
+        instruction.innerText=step.emoji+' '+step.text;
+        voiceHint.innerText='Mantenha a posição por 5 segundos contínuos';
+        say(step.voice, 0.9);
+        updateDots(idx);
+        setArrow(step.dir,'wrong');
+        holdWrap.style.display='flex';
+        holdTimer.innerText='5.0s';
+        holdInner.style.width='0%';
+        holdInner.className=''; holdInner.classList.add('wrong');
+        holdLabel.innerText='Aguardando posição correta...';
+
+        /* Calibrar posição neutra — 10 amostras durante 2s */
+        calibrated=false; calH=0; calV=0;
+        dbg('Calibrando...');
+        instruction.innerText=step.emoji+' '+step.text+' — calibrando...';
+        const calSamples=[]; prevNose=null;
+        for(let c=0;c<10;c++){
+          await sleep(200);
+          if(stopped) return;
+          const r=await getRawHV();
+          if(r) calSamples.push(r);
+        }
+        if(calSamples.length>=5){
+          calH=calSamples.reduce((s,r)=>s+r.h,0)/calSamples.length;
+          calV=calSamples.reduce((s,r)=>s+r.v,0)/calSamples.length;
+          calibrated=true;
+        }
+        instruction.innerText=step.emoji+' '+step.text;
+        dbg('Cal: H='+calH.toFixed(3)+' V='+calV.toFixed(3));
+
+        /* Hold loop */
+        let holdStart=null, holdAcc=0;
+        let stepDone=false;
+        let voiceCool=0;
+        prevNose=null;
+
+        detTick=setInterval(async()=>{
+          if(stopped||!running) return;
+
+          const raw=await getRawHV();
+          if(!raw){
+            holdStart=null; holdAcc=0;
+            drawBorder('#888888');
+            holdLabel.innerText='Rosto não detectado — aproxime-se';
+            motionBadge.className=''; motionBadge.innerText='Sem rosto';
+            rawDebug.innerText='sem detecção';
+            setArrow(step.dir,'wrong');
+            holdTimer.innerText='5.0s'; holdInner.style.width='0%';
+            return;
+          }
+
+          /* Movimento */
+          const motion=raw.motion;
+          const motionBad = motion > MOTION_THR;
+
+          /* Direção corrigida pela calibração */
+          const H = calibrated ? raw.h - calH : raw.h;
+          const V = calibrated ? raw.v - calV : raw.v;
+
+          /* Verifica direção */
+          const ok = checkDir(step.dir, H, V);
+
+          rawDebug.innerText=
+            'H='+H.toFixed(3)+' V='+V.toFixed(3)+
+            ' | mov='+motion.toFixed(1)+
+            ' | '+(ok?'✅':'❌')+' '+(motionBad?'⚠mov':'');
+
+          dbg('dir='+step.dir+' H='+H.toFixed(3)+' V='+V.toFixed(3)+' ok='+ok+' mov='+motion.toFixed(1));
+
+          /* Borda e badge */
+          if(motionBad){
+            drawBorder('#ffcc00');
+            motionBadge.className='warn'; motionBadge.innerText='⚠ Movimento!';
+          } else if(ok){
+            drawBorder('#00e5a0');
+            motionBadge.className='ok'; motionBadge.innerText='✓ Correto';
+          } else {
+            drawBorder('#ff4d4d');
+            motionBadge.className='bad'; motionBadge.innerText='✗ Errado';
+          }
+
+          /* Arrow */
+          setArrow(step.dir, ok&&!motionBad?'correct':'wrong');
+
+          /* Acumula tempo somente se ok E sem movimento */
+          const now=Date.now();
+          if(ok && !motionBad){
+            if(!holdStart) holdStart=now;
+            holdAcc = (now-holdStart)/1000;
+          } else {
+            /* Qualquer erro reseta tudo */
+            if(holdAcc>0 && voiceCool<=0){
+              if(motionBad){ say('Movimento detectado. Fique parado.',1.1); voiceCool=20; }
+              else          { say('Direção errada. Corrija o olhar.',1.0); voiceCool=20; }
+            }
+            holdStart=null; holdAcc=0;
+          }
+          if(voiceCool>0) voiceCool--;
+
+          /* Atualiza barra */
+          const pct=Math.min((holdAcc/HOLD_NEEDED)*100,100);
+          holdInner.style.width=pct+'%';
+          holdInner.className='';
+          holdInner.classList.add(motionBad?'motion':(ok?'correct':'wrong'));
+
+          const rem=Math.max(0, HOLD_NEEDED-holdAcc);
+          holdTimer.innerText=rem.toFixed(1)+'s';
+          holdTimer.style.color = ok&&!motionBad ? '#00e5a0' : '#ff4d4d';
+
+          if(ok&&!motionBad){
+            holdLabel.innerText='Mantenha! '+rem.toFixed(1)+'s restantes';
+          } else if(motionBad){
+            holdLabel.innerText='Movimento detectado — fique parado!';
+          } else {
+            holdLabel.innerText='Olhe na direção indicada pela seta';
+          }
+
+          if(holdAcc>=HOLD_NEEDED) stepDone=true;
+
+        }, POLL_MS);
+
+        /* Espera passo terminar */
+        while(!stepDone&&!stopped) await sleep(100);
+        clearInterval(detTick); detTick=null;
+        if(stopped) return;
+
+        /* Passo concluído */
+        say('Ótimo!',1.0);
+        drawBorder('#00e5a0',14);
+        await sleep(400);
+        clearCanvas(); clearArrows();
+        holdWrap.style.display='none';
+
+        const pct=Math.round(((idx+1)/steps.length)*100);
+        progInner.style.width=pct+'%';
+        progStep.innerText=(idx+1)+' / '+steps.length;
+        progPct.innerText=pct+'%';
+
+        /* Pausa 3s entre passos */
+        if(idx<steps.length-1){
+          instruction.innerText='✅ Ótimo! Prepare-se...';
+          voiceHint.innerText='Próxima instrução em...';
+          for(let j=3;j>0;j--){ if(stopped)return; countdown.innerText=j; await sleep(1000); }
+          countdown.innerText='';
+        }
+      }
+
+      /* Fim */
+      instruction.innerText='✅ Captura concluída!';
+      voiceHint.innerText='O vídeo foi salvo automaticamente.';
+      rawDebug.innerText='';
+      say('Captura facial concluída com sucesso!',0.9);
+      startBtn.disabled=false; stopBtn.disabled=true;
+      if(mediaRecorder&&mediaRecorder.state!=='inactive') mediaRecorder.stop();
+      clearCanvas(); clearArrows();
+      updateDots(steps.length);
+      dbg('Concluído.');
+    }
+
+    /* ── Lê H/V brutos do rosto (sem calibração) ────────────── */
+    async function getRawHV(){
+      if(!modelsLoaded||!video||video.readyState<2) return null;
+      try{
+        const det=await faceapi
+          .detectSingleFace(video,new faceapi.TinyFaceDetectorOptions({inputSize:224,scoreThreshold:0.5}))
+          .withFaceLandmarks(true);
+        if(!det||!det.landmarks) return null;
+
+        const lm=det.landmarks;
+        const box=det.detection.box;
+
+        /* Movimento: distância média dos pontos do nariz frame a frame */
+        const noseNow=lm.getNose();
+        let motion=0;
+        if(prevNose){
+          let s=0;
+          for(let i=0;i<noseNow.length;i++)
+            s+=Math.sqrt(Math.pow(noseNow[i].x-prevNose[i].x,2)+Math.pow(noseNow[i].y-prevNose[i].y,2));
+          motion=s/noseNow.length;
+        }
+        prevNose=noseNow;
+
+        /* Ponto de referência: nariz[3] vs centro dos olhos */
+        const noseTip=noseNow[3];
+        const le=lm.getLeftEye(), re=lm.getRightEye();
+        const ecX=(le[0].x+le[3].x+re[0].x+re[3].x)/4;
+        const ecY=(le[0].y+le[3].y+re[0].y+re[3].y)/4;
+
+        /* Normaliza pela LARGURA do rosto (mais estável que diagonal) */
+        const fw=box.width||1;
+        const h=(noseTip.x-ecX)/fw;   /* positivo = direita */
+        const v=(noseTip.y-ecY)/fw;   /* positivo = baixo  */
+
+        return {h, v, motion};
+      }catch(e){ return null; }
+    }
+
+    /* ── Verifica direção com limiares precisos ─────────────── */
+    /*
+      Após calibração, H e V representam o DESVIO em relação à posição neutra.
+      Limiares definidos em fração da largura do rosto:
+        - TOL = 0.12  → precisa desviar pelo menos 12% da largura do rosto
+        - LOCK= 0.07  → eixo oposto não pode exceder 7% (anticontaminação)
+      Estes valores foram escolhidos para exigir movimento real sem falsos positivos.
+    */
+    function checkDir(dir, H, V){
+      const TOL  = 0.12;   /* limiar mínimo para considerar "desviado" */
+      const LOCK = 0.07;   /* eixo oposto deve ficar dentro deste valor */
+
+      if(dir==='center') return Math.abs(H)<TOL && Math.abs(V)<TOL;
+      if(dir==='smile')  return true;
+
+      if(dir==='up')         return V < -TOL  && Math.abs(H) < LOCK;
+      if(dir==='down')       return V >  TOL  && Math.abs(H) < LOCK;
+      if(dir==='left')       return H < -TOL  && Math.abs(V) < LOCK;
+      if(dir==='right')      return H >  TOL  && Math.abs(V) < LOCK;
+      if(dir==='up_left')    return V < -TOL  && H < -TOL;
+      if(dir==='up_right')   return V < -TOL  && H >  TOL;
+      if(dir==='down_left')  return V >  TOL  && H < -TOL;
+      if(dir==='down_right') return V >  TOL  && H >  TOL;
+      return false;
+    }
+
+  }); /* fim DOMContentLoaded */
+  </script>
+</body>
+</html>
